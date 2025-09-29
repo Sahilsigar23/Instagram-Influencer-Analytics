@@ -60,6 +60,11 @@ else:
     app.add_middleware(
         CORSMiddleware,
         allow_origins=allowed_origins,
+        # Allow any subdomain of onrender.com (deployed preview apps) so
+        # frontend hosted on Render can talk to the API without manual
+        # environment changes. This is safe for our development preview
+        # workflow; in production you may want to restrict this.
+        allow_origin_regex=r"https://.*\.onrender\.com",
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
