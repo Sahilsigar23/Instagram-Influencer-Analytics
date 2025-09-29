@@ -1,27 +1,17 @@
-from typing import AsyncIterator
+from sqlmodel import SQLModel, create_engine, Session
 
-from sqlmodel import SQLModel
-from sqlmodel.ext.asyncio.session import AsyncSession
-from sqlalchemy.ext.asyncio import create_async_engine, AsyncEngine
-from sqlalchemy.orm import sessionmaker
+# Use synchronous SQLite (no async needed)
+DATABASE_URL = "sqlite:///./backend/influencers.db"
 
-DATABASE_URL = "sqlite+aiosqlite:///./influencers.db"
-
-engine: AsyncEngine = create_async_engine(DATABASE_URL, echo=False, future=True)
-AsyncSessionLocal = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+engine = create_engine(DATABASE_URL, echo=False, connect_args={"check_same_thread": False})
 
 
-async def init_db() -> None:
-	async with engine.begin() as conn:
-		await conn.run_sync(SQLModel.metadata.create_all)
+def init_db():
+    """Initialize database tables."""
+    SQLModel.metadata.create_all(engine)
 
 
-# FastAPI dependency that yields a session
-async def get_session() -> AsyncIterator[AsyncSession]:
-	session: AsyncSession = AsyncSessionLocal()
-	try:
-		yield session
-	finally:
-		await session.close()
-
-
+def get_session():
+    """Dependency to get database session."""
+    with Session(engine) as session:
+        yield session

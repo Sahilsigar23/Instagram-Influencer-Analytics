@@ -48,23 +48,34 @@ export default function ProfilePage() {
 		try {
 			setLoading(true);
 			setError(null);
-			const response = await fetch(`${API_BASE}/fetch-apify/${username}`, {
-				method: "POST",
-				headers: { "Content-Type": "application/json" }
-			});
-			
-			if (!response.ok) {
-				const errorData = await response.json();
-				throw new Error(errorData.detail || "Failed to fetch from Apify");
+			// Start background fetch so UI doesn't block while Apify scrapes (can take >30s)
+			const resp = await fetch(`${API_BASE}/fetch-apify-background/${username}`, { method: "POST" });
+			if (!resp.ok) {
+				const err = await resp.json().catch(() => ({}));
+				throw new Error(err.detail || "Failed to start background fetch");
 			}
-			
-			const result = await response.json();
-			alert(result.message);
-			
-			// Reload data after fetching
+			alert("Fetch started in background. We'll poll for results and update when ready (may take up to a minute).");
+			// Poll influencer endpoint for results with a timeout
+			const start = Date.now();
+			const timeout = 90_000; // 90 seconds
+			while (Date.now() - start < timeout) {
+				await new Promise((r) => setTimeout(r, 3000));
+				try {
+					const inf = await fetchInfluencer(username);
+					if (inf && inf.reels && inf.reels.length > 0) {
+						setData(inf);
+						alert(`Done — found ${inf.reels.length} reels`);
+						return;
+					}
+				} catch (_) {
+					// ignore transient errors while scraping
+				}
+			}
+			// Timeout expired — do a final load and warn user
 			await load();
+			alert("Background fetch started but no reels appeared within 90s. You can try again or check backend logs.");
 		} catch (e: any) {
-			setError(e?.message ?? "Failed to fetch from Apify");
+			setError(e?.message ?? "Failed to start background fetch");
 		} finally {
 			setLoading(false);
 		}
@@ -145,6 +156,17 @@ export default function ProfilePage() {
 			],
 		};
 	}, [data]);
+
+	function ChartPlaceholder({ title }: { title?: string }) {
+		return (
+			<div className="rounded-2xl bg-gradient-to-br from-neutral-900/80 to-neutral-950/80 ring-1 ring-neutral-800 p-6 flex items-center justify-center text-neutral-500">
+				<div className="text-center">
+					<div className="text-xl font-semibold mb-2">{title ?? "No data"}</div>
+					<div className="text-sm">Not enough posts to display this chart.</div>
+				</div>
+			</div>
+		);
+	}
 
 	return (
 		<div className="min-h-screen bg-gradient-to-br from-neutral-950 via-neutral-900 to-neutral-950 p-4 md:p-6">
@@ -570,21 +592,25 @@ export default function ProfilePage() {
 										<span className="text-emerald-400">📊</span>
 										Likes vs Comments
 									</h3>
-									<ResponsiveContainer width="100%" height={280}>
-										<BarChart data={chartData}>
-											<XAxis dataKey="name" stroke="#737373" />
-											<YAxis stroke="#737373" />
-											<Tooltip 
-												contentStyle={{ 
-													backgroundColor: '#171717', 
-													border: '1px solid #404040',
-													borderRadius: '8px'
-												}}
-											/>
-											<Bar dataKey="likes" fill="#22c55e" radius={[6,6,0,0]} />
-											<Bar dataKey="comments" fill="#3b82f6" radius={[6,6,0,0]} />
-										</BarChart>
-									</ResponsiveContainer>
+									{data.posts && data.posts.length > 0 ? (
+										<ResponsiveContainer width="100%" height={280}>
+											<BarChart data={chartData}>
+												<XAxis dataKey="name" stroke="#737373" />
+												<YAxis stroke="#737373" />
+												<Tooltip 
+													contentStyle={{ 
+														backgroundColor: '#171717', 
+														border: '1px solid #404040',
+														borderRadius: '8px'
+													}}
+												/>
+												<Bar dataKey="likes" fill="#22c55e" radius={[6,6,0,0]} />
+												<Bar dataKey="comments" fill="#3b82f6" radius={[6,6,0,0]} />
+											</BarChart>
+										</ResponsiveContainer>
+									) : (
+										<ChartPlaceholder title="Likes vs Comments" />
+									)}
 								</div>
 
 								<div className="rounded-2xl bg-gradient-to-br from-neutral-900/80 to-neutral-950/80 ring-1 ring-neutral-800 p-6">
@@ -633,20 +659,24 @@ export default function ProfilePage() {
 										<span className="text-purple-400">🏷️</span>
 										Post Categories
 									</h3>
-									<ResponsiveContainer width="100%" height={240}>
-										<BarChart data={categoryData}>
-											<XAxis dataKey="name" stroke="#737373" />
-											<YAxis allowDecimals={false} stroke="#737373" />
-											<Tooltip 
-												contentStyle={{ 
-													backgroundColor: '#171717', 
-													border: '1px solid #404040',
-													borderRadius: '8px'
-												}}
-											/>
-											<Bar dataKey="value" fill="#a78bfa" radius={[6,6,0,0]} />
-										</BarChart>
-									</ResponsiveContainer>
+									{data.posts && data.posts.length > 0 ? (
+										<ResponsiveContainer width="100%" height={240}>
+											<BarChart data={categoryData}>
+												<XAxis dataKey="name" stroke="#737373" />
+												<YAxis allowDecimals={false} stroke="#737373" />
+												<Tooltip 
+													contentStyle={{ 
+														backgroundColor: '#171717', 
+														border: '1px solid #404040',
+														borderRadius: '8px'
+													}}
+												/>
+												<Bar dataKey="value" fill="#a78bfa" radius={[6,6,0,0]} />
+											</BarChart>
+										</ResponsiveContainer>
+									) : (
+										<ChartPlaceholder title="Post Categories" />
+									)}
 								</div>
 
 								<div className="rounded-2xl bg-gradient-to-br from-neutral-900/80 to-neutral-950/80 ring-1 ring-neutral-800 p-6">
@@ -654,20 +684,24 @@ export default function ProfilePage() {
 										<span className="text-emerald-400">📈</span>
 										Engagement Trends
 									</h3>
-									<ResponsiveContainer width="100%" height={240}>
-										<BarChart data={chartData.slice(0, 10)}>
-											<XAxis dataKey="name" stroke="#737373" />
-											<YAxis stroke="#737373" />
-											<Tooltip 
-												contentStyle={{ 
-													backgroundColor: '#171717', 
-													border: '1px solid #404040',
-													borderRadius: '8px'
-												}}
-											/>
-											<Bar dataKey="likes" fill="#10b981" radius={[6,6,0,0]} />
-										</BarChart>
-									</ResponsiveContainer>
+									{data.posts && data.posts.length > 0 ? (
+										<ResponsiveContainer width="100%" height={240}>
+											<BarChart data={chartData.slice(0, 10)}>
+												<XAxis dataKey="name" stroke="#737373" />
+												<YAxis stroke="#737373" />
+												<Tooltip 
+													contentStyle={{ 
+														backgroundColor: '#171717', 
+														border: '1px solid #404040',
+														borderRadius: '8px'
+													}}
+												/>
+												<Bar dataKey="likes" fill="#10b981" radius={[6,6,0,0]} />
+											</BarChart>
+										</ResponsiveContainer>
+									) : (
+										<ChartPlaceholder title="Engagement Trends" />
+									)}
 								</div>
 							</section>
 						</div>

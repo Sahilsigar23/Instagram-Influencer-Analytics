@@ -6,6 +6,7 @@ from typing import List
 from dotenv import load_dotenv
 
 import requests
+import asyncio
 from fastapi import FastAPI, Depends, HTTPException
 import traceback
 from fastapi.middleware.cors import CORSMiddleware
@@ -418,6 +419,189 @@ async def fetch_from_apify(username: str, session: AsyncSession = Depends(get_se
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Error fetching from Apify: {str(e)}")
+
+
+async def _fetch_and_store_background(username: str) -> dict:
+    """Helper to fetch from Apify and store results in DB. Runs in background.
+    Returns a dict with counts for logging. This function creates its own DB session.
+    """
+    session_gen = get_session()
+    session: AsyncSession = await session_gen.__anext__()
+    try:
+        apify_data = fetch_public_profile(username)
+        if not apify_data:
+            return {"status": "no_data"}
+
+        profile = apify_data
+
+        # Create or update influencer
+        result = await session.execute(select(Influencer).where(Influencer.username == username))
+        inf = result.scalar_one_or_none()
+
+        if inf:
+            inf.name = profile.get("fullName", username)
+            inf.profile_picture_url = profile.get("profilePicUrl", profile.get("profilePicture"))
+            inf.followers = int(profile.get("followersCount", 0))
+            inf.following = int(profile.get("followsCount", 0))
+            inf.posts_count = int(profile.get("postsCount", 0))
+        else:
+            inf = Influencer(
+                name=profile.get("fullName", username),
+                username=username,
+                profile_picture_url=profile.get("profilePicUrl", profile.get("profilePicture")),
+                followers=int(profile.get("followersCount", 0)),
+                following=int(profile.get("followsCount", 0)),
+                posts_count=int(profile.get("postsCount", 0)),
+            )
+            session.add(inf)
+
+        await session.commit()
+        await session.refresh(inf)
+
+        # Delete existing posts and reels
+        existing_posts = (await session.execute(select(Post).where(Post.influencer_id == inf.id))).scalars().all()
+        for post in existing_posts:
+            await session.delete(post)
+        existing_reels = (await session.execute(select(Reel).where(Reel.influencer_id == inf.id))).scalars().all()
+        for reel in existing_reels:
+            await session.delete(reel)
+
+        # Extract posts and reels from the profile payload where possible. This
+        # avoids running a separate post-scraper actor and reduces total time.
+        posts_added = 0
+        reels_added = 0
+
+        # Many Apify profile outputs include latestPosts / latest_posts / posts
+        posts_source = profile.get("latestPosts") or profile.get("latest_posts") or profile.get("posts") or profile.get("latest_posts_data")
+        if posts_source and isinstance(posts_source, list):
+            for p in posts_source[:50]:
+                # Detect if this item is a video/reel
+                is_video = False
+                if isinstance(p, dict):
+                    if p.get("isVideo") or p.get("is_reel"):
+                        is_video = True
+                    t = p.get("type") or p.get("mediaType") or p.get("__typename")
+                    if isinstance(t, str) and ("video" in t.lower() or "graphvideo" in t.lower()):
+                        is_video = True
+                    if p.get("videoUrl") or p.get("video_url"):
+                        is_video = True
+
+                if is_video:
+                    thumb = p.get("thumbnailUrl") or p.get("displayUrl") or p.get("imageUrl") or ""
+                    reel = Reel(
+                        influencer_id=inf.id,
+                        thumbnail_url=thumb,
+                        caption=p.get("caption", ""),
+                        views=int(p.get("playCount") or p.get("viewsCount") or p.get("views") or 0),
+                        likes=int(p.get("likesCount") or p.get("likes") or 0),
+                        comments=int(p.get("commentsCount") or p.get("comments") or 0),
+                        tags=",".join(p.get("tags", []) or []) if isinstance(p.get("tags"), list) else None,
+                    )
+                    session.add(reel)
+                    reels_added += 1
+                else:
+                    post = Post(
+                        influencer_id=inf.id,
+                        image_url=p.get("displayUrl", p.get("url", p.get("imageUrl", ""))),
+                        caption=p.get("caption", ""),
+                        likes=int(p.get("likesCount", p.get("likes", 0)) or 0),
+                        comments=int(p.get("commentsCount", p.get("comments", 0)) or 0),
+                    )
+                    session.add(post)
+                    posts_added += 1
+        else:
+            # Fallback: call the post-scraper only if profile payload lacked posts
+            apify_posts = fetch_instagram_posts_apify(username, limit=30)
+            for post_data in apify_posts:
+                is_video = False
+                try:
+                    if isinstance(post_data, dict):
+                        if post_data.get("isVideo"):
+                            is_video = True
+                        t = post_data.get("type") or post_data.get("mediaType")
+                        if isinstance(t, str) and t.lower() == "video":
+                            is_video = True
+                        if post_data.get("videoUrl") or post_data.get("video_url"):
+                            is_video = True
+                except Exception:
+                    is_video = False
+
+                if is_video:
+                    thumb = post_data.get("thumbnailUrl") or post_data.get("displayUrl") or post_data.get("imageUrl") or ""
+                    reel = Reel(
+                        influencer_id=inf.id,
+                        thumbnail_url=thumb,
+                        caption=post_data.get("caption", ""),
+                        views=int(post_data.get("viewsCount", post_data.get("views", 0)) or 0),
+                        likes=int(post_data.get("likesCount", post_data.get("likes", 0)) or 0),
+                        comments=int(post_data.get("commentsCount", post_data.get("comments", 0)) or 0),
+                        tags=",".join(post_data.get("tags", []) or []) if isinstance(post_data.get("tags"), list) else None,
+                    )
+                    session.add(reel)
+                    reels_added += 1
+                else:
+                    post = Post(
+                        influencer_id=inf.id,
+                        image_url=post_data.get("displayUrl", post_data.get("url", "")),
+                        caption=post_data.get("caption", ""),
+                        likes=int(post_data.get("likesCount", 0)),
+                        comments=int(post_data.get("commentsCount", 0)),
+                    )
+                    session.add(post)
+                    posts_added += 1
+
+        # Also extract reels from profile-level fields if present
+        reels_source = profile.get("latestReels") or profile.get("latest_reels") or profile.get("reels") or profile.get("latestReelsPosts")
+        if reels_source and isinstance(reels_source, list):
+            for rdata in reels_source[:20]:
+                thumb = rdata.get("thumbnailUrl") or rdata.get("displayUrl") or rdata.get("imageUrl") or ""
+                cap = rdata.get("caption") or rdata.get("description") or ""
+                views = int(rdata.get("playCount") or rdata.get("viewsCount") or rdata.get("views") or 0)
+                likes = int(rdata.get("likesCount") or rdata.get("likes") or 0)
+                comments = int(rdata.get("commentsCount") or rdata.get("comments") or 0)
+                tags_val = rdata.get("tags") or rdata.get("keywords") or None
+                tags_csv = ",".join(tags_val) if isinstance(tags_val, list) else (tags_val if isinstance(tags_val, str) else None)
+
+                reel = Reel(
+                    influencer_id=inf.id,
+                    thumbnail_url=thumb or "",
+                    caption=cap,
+                    views=views,
+                    likes=likes,
+                    comments=comments,
+                    tags=tags_csv,
+                )
+                session.add(reel)
+                reels_added += 1
+
+        await session.commit()
+        # Close session generator
+        try:
+            await session_gen.aclose()
+        except Exception:
+            pass
+
+        return {"status": "done", "posts_added": posts_added, "reels_added": reels_added}
+    except Exception as e:
+        try:
+            await session_gen.aclose()
+        except Exception:
+            pass
+        raise
+
+
+@app.post("/fetch-apify-background/{username}")
+async def fetch_from_apify_background(username: str):
+    """Kick off an asynchronous background fetch from Apify and return immediately.
+    Use /influencers/{username} to poll for results.
+    """
+    try:
+        # Start background task
+        asyncio.create_task(_fetch_and_store_background(username))
+        return {"status": "started", "message": "Fetch started in background. It may take up to a minute."}
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/debug-apify/{username}")
