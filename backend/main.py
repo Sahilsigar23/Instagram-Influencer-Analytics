@@ -32,22 +32,32 @@ app = FastAPI(title="Influencer Analytics API")
 # Get frontend URL from environment or use default
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5173")
 
-# Configure CORS with environment-based origins
-allowed_origins = [
-	FRONTEND_URL,
-	"https://instagram-influencer-analytics-1.onrender.com",  # Production frontend
-	"http://localhost:5173",  # Local development
-	"http://127.0.0.1:5173",
-	"http://localhost:5174",
-]
-
-app.add_middleware(
-	CORSMiddleware,
-	allow_origins=allowed_origins,
-	allow_credentials=True,
-	allow_methods=["*"],
-	allow_headers=["*"],
-)
+# Configure CORS with environment-based origins. For local development you
+# can set DEV_ALLOW_ALL_ORIGINS=1 to allow any origin (useful when running
+# frontend on different ports during development).
+if os.getenv("DEV_ALLOW_ALL_ORIGINS") == "1":
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+else:
+    allowed_origins = [
+        FRONTEND_URL,
+        "https://instagram-influencer-analytics-1.onrender.com",  # Production frontend
+        "http://localhost:5173",  # Local development
+        "http://127.0.0.1:5173",
+        "http://localhost:5174",
+    ]
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=allowed_origins,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
 
 @app.on_event("startup")
@@ -268,6 +278,36 @@ async def analyze_post(post_id: int, session: AsyncSession = Depends(get_session
 	post.quality = quality_indicators(image_bytes)
 	await session.commit()
 	return {"id": post.id, "keywords": post.keywords, "vibe": post.vibe, "quality": post.quality}
+
+
+@app.post("/analyze/reel/{reel_id}")
+def analyze_reel(reel_id: int, session = Depends(get_session)):
+    """Analyze a reel thumbnail (keywords/tags, vibe)."""
+    # Fetch reel synchronously
+    reel = session.get(Reel, reel_id)
+    if not reel:
+        raise HTTPException(status_code=404, detail="Reel not found")
+
+    # fetch thumbnail bytes
+    try:
+        resp = requests.get(reel.thumbnail_url, timeout=10)
+        resp.raise_for_status()
+        image_bytes = resp.content
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Failed to fetch thumbnail: {str(e)}")
+
+    try:
+        # Run analysis helpers (same as posts)
+        tags = extract_keywords_from_image(image_bytes)
+        reel.tags = ",".join(tags)
+        reel.vibe = classify_vibe_from_image(image_bytes)
+        session.commit()
+
+        return {"id": reel.id, "tags": reel.tags, "vibe": reel.vibe}
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Analysis failed: {str(e)}")
 
 
 @app.post("/seed/{username}")
