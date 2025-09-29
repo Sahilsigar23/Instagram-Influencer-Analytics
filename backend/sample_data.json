@@ -1,0 +1,10 @@
+{
+  "user": {
+    "full_name": "Ralph Edwards",
+    "profile_pic_url": "https://images.unsplash.com/photo-1502685104226-ee32379fefbe?w=512",
+    "edge_followed_by": { "count": 125000 },
+    "edge_follow": { "count": 310 },
+    "edge_owner_to_timeline_media": { "count": 430 }
+  }
+}
+
