@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import os
+from pathlib import Path
 from typing import List
 from dotenv import load_dotenv
 
@@ -25,7 +26,12 @@ from analysis import (
     classify_vibe_from_image,
     quality_indicators,
 )  # type: ignore
-from scraper import fetch_public_profile, fetch_instagram_posts_apify  # type: ignore
+from scraper import (
+    fetch_public_profile,
+    fetch_instagram_posts_apify,
+    fetch_instagram_profile_apify,
+    fetch_instagram_profile_direct,
+)  # type: ignore
 
 app = FastAPI(title="Influencer Analytics API")
 
@@ -673,11 +679,52 @@ async def debug_apify(username: str):
     Useful to see whether reels are present and under which keys.
     """
     try:
-        data = fetch_public_profile(username)
-        if not data:
-            return {"status": "empty", "detail": "No data returned from Apify or fallback"}
-        # Optionally trim very large payloads
-        return {"status": "ok", "payload": data}
+        diagnostics: dict = {"apify": None, "direct": None, "sample_fallback": None}
+
+        # Run Apify fetch and capture exceptions/details
+        try:
+            apify_payload = fetch_instagram_profile_apify(username)
+            if apify_payload:
+                # if payload is a list of items, include count
+                if isinstance(apify_payload, list):
+                    diagnostics["apify"] = {"status": "ok", "items": len(apify_payload)}
+                else:
+                    diagnostics["apify"] = {"status": "ok", "keys": list(apify_payload.keys())}
+                diagnostics["apify_payload_preview"] = apify_payload if (isinstance(apify_payload, dict) and len(str(apify_payload)) < 2000) else None
+            else:
+                diagnostics["apify"] = {"status": "empty"}
+        except Exception as e:
+            diagnostics["apify"] = {"status": "error", "error": str(e)}
+
+        # Run direct fetch fallback and capture details
+        try:
+            direct_payload = None
+            # import here to avoid circulars
+            from scraper import fetch_instagram_profile_direct  # type: ignore
+            direct_payload = fetch_instagram_profile_direct(username)
+            if direct_payload:
+                diagnostics["direct"] = {"status": "ok", "keys": list(direct_payload.keys())}
+                diagnostics["direct_payload_preview"] = direct_payload if (isinstance(direct_payload, dict) and len(str(direct_payload)) < 2000) else None
+            else:
+                diagnostics["direct"] = {"status": "empty"}
+        except Exception as e:
+            diagnostics["direct"] = {"status": "error", "error": str(e)}
+
+        # Attach sample fallback availability
+        try:
+            sample_path = Path(__file__).with_name("sample_data.json")
+            diagnostics["sample_fallback"] = {"exists": sample_path.exists()}
+        except Exception:
+            diagnostics["sample_fallback"] = {"exists": False}
+
+        # Include environment hints
+        diagnostics["env"] = {
+            "has_apify_token": bool(os.getenv("APIFY_API_TOKEN")),
+            "dev_allow_all_origins": os.getenv("DEV_ALLOW_ALL_ORIGINS") == "1",
+            "frontend_url": os.getenv("FRONTEND_URL", FRONTEND_URL),
+        }
+
+        return {"status": "ok", "diagnostics": diagnostics}
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
