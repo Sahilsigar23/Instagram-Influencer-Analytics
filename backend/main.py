@@ -52,24 +52,30 @@ app.add_middleware(
 
 
 @app.on_event("startup")
-async def on_startup() -> None:
-	await init_db()
+def on_startup() -> None:
+	init_db()  # No await - it's synchronous now
 	# Pre-seed demo data
-	from sqlmodel.ext.asyncio.session import AsyncSession
 	session_gen = get_session()
-	session: AsyncSession = await session_gen.__anext__()
+	session = next(session_gen)
 	try:
-		await seed_sample_data(session)
+		seed_sample_data(session)
 	finally:
 		try:
-			await session_gen.aclose()  # type: ignore[attr-defined]
+			session.close()
 		except Exception:
 			pass
 
 
-async def seed_sample_data(session: AsyncSession, username: str = "ralph") -> None:
+def seed_sample_data(session, username: str = "ralph") -> None:
     """Seed sample posts/reels for a username where missing."""
-    inf = await ensure_influencer(session, username)
+    # Get or create influencer synchronously
+    result = session.execute(select(Influencer).where(Influencer.username == username))
+    inf = result.scalar_one_or_none()
+    if not inf:
+        inf = Influencer(name=username, username=username)
+        session.add(inf)
+        session.commit()
+        session.refresh(inf)
     placeholder_imgs = [
 			"https://images.unsplash.com/photo-1460353581641-37baddab0fa2?w=800",
 			"https://images.unsplash.com/photo-1507525428034-b723cf961d3e?w=800",
@@ -84,7 +90,7 @@ async def seed_sample_data(session: AsyncSession, username: str = "ralph") -> No
         ]
 
     # Seed posts if none
-    posts = (await session.execute(select(Post).where(Post.influencer_id == inf.id))).scalars().all()
+    posts = session.execute(select(Post).where(Post.influencer_id == inf.id)).scalars().all()
     if not posts:
         for i, url in enumerate(placeholder_imgs[:10]):
             session.add(
@@ -98,7 +104,7 @@ async def seed_sample_data(session: AsyncSession, username: str = "ralph") -> No
             )
 
     # Seed reels if none
-    reels = (await session.execute(select(Reel).where(Reel.influencer_id == inf.id))).scalars().all()
+    reels = session.execute(select(Reel).where(Reel.influencer_id == inf.id)).scalars().all()
     if not reels:
         for i, url in enumerate(placeholder_imgs[:5]):
             session.add(
@@ -111,7 +117,7 @@ async def seed_sample_data(session: AsyncSession, username: str = "ralph") -> No
                     comments=40 + i * 6,
                 )
             )
-    await session.commit()
+    session.commit()
 
 
 
@@ -170,13 +176,21 @@ async def ensure_influencer(session: AsyncSession, username: str) -> Influencer:
 
 
 @app.get("/influencers/{username}", response_model=InfluencerOut)
-async def get_influencer(username: str, session: AsyncSession = Depends(get_session)):
+def get_influencer(username: str, session = Depends(get_session)):
     try:
-        inf = await ensure_influencer(session, username)
-        await session.refresh(inf)
+        # Get or create influencer synchronously
+        result = session.execute(select(Influencer).where(Influencer.username == username))
+        inf = result.scalar_one_or_none()
+        if not inf:
+            inf = Influencer(name=username, username=username)
+            session.add(inf)
+            session.commit()
+            session.refresh(inf)
+        
+        session.refresh(inf)
         # load posts and reels
-        posts = (await session.execute(select(Post).where(Post.influencer_id == inf.id).limit(10))).scalars().all()
-        reels = (await session.execute(select(Reel).where(Reel.influencer_id == inf.id).limit(5))).scalars().all()
+        posts = session.execute(select(Post).where(Post.influencer_id == inf.id).limit(10)).scalars().all()
+        reels = session.execute(select(Reel).where(Reel.influencer_id == inf.id).limit(5)).scalars().all()
 
         # compute averages and engagement
         if posts:
@@ -186,8 +200,8 @@ async def get_influencer(username: str, session: AsyncSession = Depends(get_sess
             inf.avg_comments = avg_comments
             if inf.followers:
                 inf.engagement_rate = (avg_likes + avg_comments) / max(1, inf.followers) * 100.0
-        await session.commit()
-        await session.refresh(inf)
+        session.commit()
+        session.refresh(inf)
 
         # transform to schema lists
         def split_csv(val: str | None) -> list[str] | None:
