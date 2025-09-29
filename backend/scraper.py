@@ -5,6 +5,8 @@ import os
 from pathlib import Path
 from typing import Any, Dict, List
 from apify_client import ApifyClient
+import re
+from requests import RequestException
 
 
 def get_apify_token() -> str:
@@ -120,10 +122,77 @@ def fetch_public_profile(username: str) -> Dict[str, Any]:
 	apify_data = fetch_instagram_profile_apify(username)
 	if apify_data:
 		return apify_data
-	
+
+	# Try a direct public Instagram request (works often for public profiles)
+	direct = fetch_instagram_profile_direct(username)
+	if direct:
+		return direct
+
 	# Fallback to bundled sample
 	print("⚠️  Using sample data fallback")
 	sample_path = Path(__file__).with_name("sample_data.json")
 	if sample_path.exists():
 		return json.loads(sample_path.read_text(encoding="utf-8"))
+	return {}
+
+
+def fetch_instagram_profile_direct(username: str) -> Dict[str, Any]:
+	"""Attempt to fetch Instagram profile data directly from instagram.com.
+
+	Tries the documented JSON endpoints, then falls back to HTML parsing of
+	embedded JSON. Returns dict on success or {} on failure.
+	"""
+	headers = {
+		"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+		"Accept": "text/html,application/json,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+	}
+
+	urls = [
+		f"https://www.instagram.com/{username}/?__a=1&__d=dis",
+		f"https://www.instagram.com/{username}/?__a=1",
+		f"https://www.instagram.com/{username}/",
+	]
+
+	for url in urls:
+		try:
+			print(f"🔎 Trying direct fetch from Instagram: {url}")
+			resp = requests.get(url, headers=headers, timeout=10)
+			if resp.status_code != 200:
+				# continue to next attempt
+				continue
+
+			# If Content-Type indicates JSON, parse directly
+			ctype = resp.headers.get("content-type", "")
+			if "application/json" in ctype:
+				try:
+					return resp.json()
+				except Exception:
+					continue
+
+			text = resp.text
+			# Try to find window._sharedData or similar embedded JSON
+			m = re.search(r"window\._sharedData\s*=\s*({.+?});</script>", text, flags=re.S)
+			if not m:
+				# Try a looser regex for "<script type=\"text/javascript\">window._sharedData = {...}</script>"
+				m = re.search(r"window\._sharedData\s*=\s*({.+?})\s*;", text, flags=re.S)
+			if m:
+				try:
+					payload = json.loads(m.group(1))
+					return payload
+				except Exception:
+					continue
+
+			# Some newer pages embed a JSON in <script id="__NEXT_DATA__"> ... </script>
+			m2 = re.search(r"<script id=\"__NEXT_DATA__\" type=\"application/json\">(.*?)</script>", text, flags=re.S)
+			if m2:
+				try:
+					return json.loads(m2.group(1))
+				except Exception:
+					continue
+
+		except RequestException as e:
+			# network error, try next URL
+			print(f"⚠️ direct fetch error for {url}: {e}")
+			continue
+
 	return {}
