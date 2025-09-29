@@ -33,14 +33,13 @@ app = FastAPI(title="Influencer Analytics API")
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5173")
 
 # Configure CORS with environment-based origins
-allowed_origins = [FRONTEND_URL]
-# Also allow common local development URLs
-if "localhost" in FRONTEND_URL or "127.0.0.1" in FRONTEND_URL:
-	allowed_origins.extend([
-		"http://localhost:5173",
-		"http://127.0.0.1:5173",
-		"http://localhost:5174",
-	])
+allowed_origins = [
+	FRONTEND_URL,
+	"https://instagram-influencer-analytics-1.onrender.com",  # Production frontend
+	"http://localhost:5173",  # Local development
+	"http://127.0.0.1:5173",
+	"http://localhost:5174",
+]
 
 app.add_middleware(
 	CORSMiddleware,
