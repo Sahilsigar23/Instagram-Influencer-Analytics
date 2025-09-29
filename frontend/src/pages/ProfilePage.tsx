@@ -36,6 +36,8 @@ export default function ProfilePage() {
 	const [loading, setLoading] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const [activeSection, setActiveSection] = useState<"home" | "posts" | "reels" | "analytics">("home");
+	const [analyzingPostId, setAnalyzingPostId] = useState<number | null>(null);
+	const [analyzingReelId, setAnalyzingReelId] = useState<number | null>(null);
 
 	async function load() {
 		try {
@@ -400,12 +402,28 @@ export default function ProfilePage() {
 												<button
 													onClick={async () => {
 														if (!p.id) return;
-														await analyzePost(p.id);
-														await load();
+														setAnalyzingPostId(p.id);
+														try {
+															await analyzePost(p.id);
+															await load();
+														} finally {
+															setAnalyzingPostId(null);
+														}
 													}}
-													className="w-full px-4 py-2 rounded-lg bg-gradient-to-r from-sky-600 to-sky-500 hover:from-sky-500 hover:to-sky-400 text-sm font-medium transition-all transform hover:scale-[1.02]"
+													disabled={analyzingPostId === p.id}
+													className="w-full px-4 py-2 rounded-lg bg-gradient-to-r from-sky-600 to-sky-500 hover:from-sky-500 hover:to-sky-400 disabled:from-neutral-700 disabled:to-neutral-600 disabled:cursor-not-allowed text-sm font-medium transition-all transform hover:scale-[1.02] flex items-center justify-center gap-2"
 												>
-													🔍 Analyze Post
+													{analyzingPostId === p.id ? (
+														<>
+															<span className="inline-block animate-spin">⏳</span>
+															<span>Analyzing...</span>
+														</>
+													) : (
+														<>
+															<span>🔍</span>
+															<span>Analyze Post</span>
+														</>
+													)}
 												</button>
 											)}
 											{p.vibe && (
@@ -533,27 +551,35 @@ export default function ProfilePage() {
 														)}
 													</div>
 												) : (
-													<div className="flex items-center gap-2">
-														<div className="text-xs text-neutral-600">No tags</div>
-														<button
-															onClick={async () => {
-																try {
-																	setLoading(true);
-																	await analyzeReel(r.id);
-																	await load();
-																	alert('✅ Reel analyzed');
-																} catch (err) {
-																	console.error('Error analyzing reel', err);
-																	alert('Error analyzing reel. See console.');
-																} finally {
-																	setLoading(false);
-																}
-															}}
-															className="px-3 py-1 rounded-lg bg-gradient-to-r from-sky-600 to-sky-500 text-xs font-medium"
-														>
-															🔍 Analyze Reel
-														</button>
-													</div>
+													<button
+														onClick={async () => {
+															setAnalyzingReelId(r.id);
+															try {
+																await analyzeReel(r.id);
+																await load();
+																alert('✅ Reel analyzed');
+															} catch (err) {
+																console.error('Error analyzing reel', err);
+																alert('Error analyzing reel. See console.');
+															} finally {
+																setAnalyzingReelId(null);
+															}
+														}}
+														disabled={analyzingReelId === r.id}
+														className="w-full px-3 py-2 rounded-lg bg-gradient-to-r from-sky-600 to-sky-500 hover:from-sky-500 hover:to-sky-400 disabled:from-neutral-700 disabled:to-neutral-600 disabled:cursor-not-allowed text-xs font-medium flex items-center justify-center gap-2"
+													>
+														{analyzingReelId === r.id ? (
+															<>
+																<span className="inline-block animate-spin">⏳</span>
+																<span>Analyzing...</span>
+															</>
+														) : (
+															<>
+																<span>🔍</span>
+																<span>Analyze Reel</span>
+															</>
+														)}
+													</button>
 												)}
 
 												{r.vibe && (
