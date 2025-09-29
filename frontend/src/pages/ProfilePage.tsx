@@ -1,11 +1,18 @@
 import { useEffect, useMemo, useState } from "react";
-import { Influencer, fetchInfluencer, analyzePost, API_BASE } from "../services/api";
+import { Influencer, fetchInfluencer, analyzePost, analyzeReel, API_BASE } from "../services/api";
 
 // Helper to proxy Instagram images through backend to bypass CORS
 function proxyImage(url: string | undefined): string {
 	if (!url) return "";
 	// If it's an Instagram URL, proxy it
-	if (url.includes("cdninstagram.com") || url.includes("instagram.com")) {
+	// include common Facebook/Instagram CDN hosts (fbcdn) so thumbnails from
+	// Instagram's CDN are proxied through the backend and avoid CORS issues.
+	if (
+		url.includes("cdninstagram.com") ||
+		url.includes("instagram.com") ||
+		url.includes("fbcdn.net") ||
+		url.includes("fna.fbcdn.net")
+	) {
 		return `${API_BASE}/proxy-image?url=${encodeURIComponent(url)}`;
 	}
 	return url;
@@ -60,13 +67,15 @@ export default function ProfilePage() {
 			const timeout = 90_000; // 90 seconds
 			while (Date.now() - start < timeout) {
 				await new Promise((r) => setTimeout(r, 3000));
-				try {
-					const inf = await fetchInfluencer(username);
-					if (inf && inf.reels && inf.reels.length > 0) {
-						setData(inf);
-						alert(`Done — found ${inf.reels.length} reels`);
-						return;
-					}
+			try {
+				const inf = await fetchInfluencer(username);
+				if (inf && ((inf.posts && inf.posts.length > 0) || (inf.reels && inf.reels.length > 0))) {
+					setData(inf);
+					const postsCount = inf.posts?.length || 0;
+					const reelsCount = inf.reels?.length || 0;
+					alert(`✅ Done — found ${postsCount} posts and ${reelsCount} reels`);
+					return;
+				}
 				} catch (_) {
 					// ignore transient errors while scraping
 				}
@@ -524,7 +533,27 @@ export default function ProfilePage() {
 														)}
 													</div>
 												) : (
-													<div className="text-xs text-neutral-600">No tags</div>
+													<div className="flex items-center gap-2">
+														<div className="text-xs text-neutral-600">No tags</div>
+														<button
+															onClick={async () => {
+																try {
+																	setLoading(true);
+																	await analyzeReel(r.id);
+																	await load();
+																	alert('✅ Reel analyzed');
+																} catch (err) {
+																	console.error('Error analyzing reel', err);
+																	alert('Error analyzing reel. See console.');
+																} finally {
+																	setLoading(false);
+																}
+															}}
+															className="px-3 py-1 rounded-lg bg-gradient-to-r from-sky-600 to-sky-500 text-xs font-medium"
+														>
+															🔍 Analyze Reel
+														</button>
+													</div>
 												)}
 
 												{r.vibe && (
