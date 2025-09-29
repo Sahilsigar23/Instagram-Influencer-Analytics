@@ -59,3 +59,10 @@ export async function analyzePost(postId: number) {
     );
     return data;
 }
+
+export async function analyzeReel(reelId: number) {
+	const { data } = await api.post<{ id: number; tags?: string; vibe?: string }>(
+		`/analyze/reel/${reelId}`
+	);
+	return data;
+}
