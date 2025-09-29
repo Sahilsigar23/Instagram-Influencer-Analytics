@@ -7,6 +7,7 @@ from typing import Any, Dict, List
 from apify_client import ApifyClient
 import re
 from requests import RequestException
+import requests
 
 
 def get_apify_token() -> str:
