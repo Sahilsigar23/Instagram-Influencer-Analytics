@@ -11,4 +11,3 @@ requests==2.32.3
 python-multipart==0.0.9
 apify-client==2.1.0
 python-dotenv==1.0.0
-greenlet==3.0.3
