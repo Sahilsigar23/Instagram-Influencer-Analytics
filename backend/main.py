@@ -266,18 +266,28 @@ def get_influencer(username: str, session = Depends(get_session)):
 
 
 @app.post("/analyze/post/{post_id}")
-async def analyze_post(post_id: int, session: AsyncSession = Depends(get_session)):
-	post = (await session.get(Post, post_id))
+def analyze_post(post_id: int, session = Depends(get_session)):
+	post = session.get(Post, post_id)
 	if not post:
 		raise HTTPException(status_code=404, detail="Post not found")
 	# fetch image bytes
-	resp = requests.get(post.image_url, timeout=10)
-	image_bytes = resp.content
-	post.keywords = ",".join(extract_keywords_from_image(image_bytes))
-	post.vibe = classify_vibe_from_image(image_bytes)
-	post.quality = quality_indicators(image_bytes)
-	await session.commit()
-	return {"id": post.id, "keywords": post.keywords, "vibe": post.vibe, "quality": post.quality}
+	try:
+		resp = requests.get(post.image_url, timeout=10)
+		resp.raise_for_status()
+		image_bytes = resp.content
+	except Exception as e:
+		traceback.print_exc()
+		raise HTTPException(status_code=500, detail=f"Failed to fetch image: {str(e)}")
+	
+	try:
+		post.keywords = ",".join(extract_keywords_from_image(image_bytes))
+		post.vibe = classify_vibe_from_image(image_bytes)
+		post.quality = quality_indicators(image_bytes)
+		session.commit()
+		return {"id": post.id, "keywords": post.keywords, "vibe": post.vibe, "quality": post.quality}
+	except Exception as e:
+		traceback.print_exc()
+		raise HTTPException(status_code=500, detail=f"Analysis failed: {str(e)}")
 
 
 @app.post("/analyze/reel/{reel_id}")
